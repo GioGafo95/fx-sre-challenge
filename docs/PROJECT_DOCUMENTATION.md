@@ -1,0 +1,129 @@
+# USD/MXN Exchange Rate Website: Project Documentation
+
+## 1. Objective and scope
+A production-grade website that shows the official USD/MXN exchange rate from Banco de México (Banxico),
+deployed with AWS CDK (which synthesizes CloudFormation) and operated against explicit SLOs.
+
+In scope: the website and API, the data ingestion, the infrastructure as code, observability, SLO/SLI/error-budget
+definitions, and a repeatable multi-account deployment. Out of scope: other currency pairs, user accounts, and
+any write path from users.
+
+Data source: Banxico SIE REST API, series **SF43718** (USD/MXN FIX rate, one value per business day, free token).
+
+## 2. Website features
+| Feature | Definition |
+|---|---|
+| Current USD exchange | Most recent published FIX rate and its publication date. |
+| Average, last 15 days | Mean of all published rates in the trailing 15 calendar days. |
+| Average, last month | Mean of all published rates in the trailing 30 calendar days. |
+| Past 10 days | Every published rate in the trailing 10 calendar days, newest first, plus a trend line. |
+
+Notes. Banxico publishes on business days only, so a 10-day window holds about 7 or 8 rates. The page shows a warning
+when the newest rate is more than 4 days old (a long weekend does not trigger it). If the data service fails, the page
+shows an explicit error with a retry button.
+
+API: `GET /api/rates` returns all of the above in one response, so a page view costs one request.
+
+## 3. Architecture
+```
+Browser -> CloudFront (TLS, security headers, cache)
+             |-- /*      -> S3 (static site, private, OAC)
+             '-- /api/*  -> Lambda Function URL (IAM auth, OAC) -> API container (FastAPI) -> DynamoDB (read)
+
+EventBridge (3 schedules) -> Ingest Lambda -> Banxico API -> DynamoDB (write)
+                                  |-- token from Secrets Manager;  failures -> SQS DLQ -> alarm
+EventBridge (every 5 min) -> Probe Lambda -> https://<cloudfront>/api/rates -> custom metrics (the SLIs)
+CloudWatch: alarms (burn rate, latency, stale data, DLQ, errors) -> SNS -> email;  one dashboard
+```
+
+### Deviations from the suggested services, and why
+The brief lists RDS, EC2, Lambda and VPC and invites changes where cost or performance improve.
+
+| Suggested | Used | Reason |
+|---|---|---|
+| Aurora MySQL | DynamoDB on-demand | The dataset is about 30 rows. Aurora needs a VPC, subnets and (for outbound Banxico calls) a NAT gateway, and has a monthly floor cost. DynamoDB has no servers to patch, is multi-AZ by default, and has point-in-time recovery. |
+| EC2 | Lambda (arm64 container image) | No instances to patch or scale. The same Docker image also runs on ECS/Fargate or locally, so the container requirement is kept. |
+| VPC | None | Nothing here needs private networking. Origin access is controlled with IAM and CloudFront OAC instead, which removes NAT and endpoint costs. |
+| (API Gateway) | Lambda Function URL + OAC | Same security (only CloudFront can invoke) with one fewer paid hop. |
+
+If the reviewers want to see a relational database, the data layer is behind a small `store` interface;
+an Aurora Serverless v2 implementation can be added without touching the API contract.
+
+## 4. Production considerations
+**Resilience**
+- Every service used is multi-AZ by design. There are no single-instance components.
+- CloudFront caches `/api/rates` for 5 minutes and serves stale data for up to 1 hour while revalidating and up to
+  24 hours if the origin errors (`stale-while-revalidate`, `stale-if-error`). A short origin outage is invisible to users.
+- The API never calls Banxico. Banxico being down only stops new data arriving; visitors keep getting the last rates
+  with the stale flag raised after 4 days.
+- Ingestion is idempotent (upserts keyed by date), retries twice, then lands in a dead-letter queue and alarms. It runs
+  on three schedules a day (weekdays 12:30 and 15:30 Mexico City time, plus a daily 06:00 catch-up) and re-reads
+  45 days each time, so a missed run heals itself.
+- DynamoDB has point-in-time recovery, deletion protection and RETAIN. Stateful resources live in their own stack with
+  termination protection, so an application change cannot affect data.
+- Disaster recovery: the data is fully re-derivable from Banxico, so RPO is effectively zero and RTO is a redeploy plus
+  one ingestion (about 15 minutes). A second region is not deployed because it would add cost for no benefit at this
+  scale. See the suggestions section.
+
+**Scalability.** Lambda, DynamoDB on-demand and CloudFront scale without configuration. Because responses are cached at
+the edge, the origin sees roughly one request per 5 minutes per edge location, whatever the traffic.
+
+**Security**
+- No public origins. S3 and the Lambda URL accept traffic only from this CloudFront distribution (OAC); the Lambda URL
+  requires SigV4.
+- Least-privilege IAM: the API role can only read the table; the ingest role can only write it and read one secret.
+- Banxico token in Secrets Manager, never in code, environment variables, images or templates. An existing secret can be
+  referenced instead of created, so the token never passes through CloudFormation.
+- HTTPS only, HSTS, a strict CSP (no inline scripts), nosniff, frame denial, no referrer. All storage is encrypted.
+- Container runs as a non-root user; ECR scans images on push; dependencies are pinned.
+
+**Cost (estimate, verify with the AWS pricing calculator).** Lambda, DynamoDB, S3 and CloudFront stay within or near
+free tier at low traffic. The recurring cost is mostly CloudWatch: nine alarms, two composite alarms, five custom
+metrics and a dashboard, plus one secret. Expect roughly **USD 5 to 8 per month**. Levers already used: arm64, on-demand
+DynamoDB, no NAT/ALB/API Gateway, edge caching, 30-day log retention, CloudFront price class 100.
+
+**Operability.** Everything is code. Structured logs, X-Ray tracing on all functions, one dashboard, and alarms with
+runbook-style descriptions. Resource names are generated, so the same code deploys to any number of accounts without
+name collisions.
+
+## 5. SLIs, SLOs and error budgets
+Definitions. An **SLI** is a measured ratio of good events to valid events. An **SLO** is the target for that ratio over
+a window. The **error budget** is `1 - SLO`: the amount of unreliability we are allowed to spend.
+
+All SLIs come from a synthetic probe that calls the public URL every 5 minutes, because that is what a visitor
+experiences, including CloudFront.
+
+| # | SLI (good event) | SLO | Window | Error budget |
+|---|---|---|---|---|
+| 1 | **Availability**: probe gets HTTP 200 with a well-formed payload containing a current rate | 99.9% | 30 days | 0.1% (about 43 minutes of failed probes) |
+| 2 | **Latency**: probe round-trip p95 | under 800 ms | 5-minute windows, alarm after 15 minutes | n/a (threshold alarm) |
+| 3 | **Freshness**: newest rate is no more than 4 days old | 99% of probes | 30 days | 1% |
+| 4 | **Ingestion success**: ingestion runs that end without reaching the DLQ | 99% of runs | 30 days | 1% |
+
+### Burn-rate alerting for SLO 1
+Burn rate is how fast the budget is being spent compared with spending it evenly over 30 days.
+
+| Alert | Burn rate | Long window | Short window | Meaning | Action |
+|---|---|---|---|---|---|
+| Fast burn | 14.4x (error ratio above 1.44%) | 1 h | 5 min | 2% of the monthly budget gone in an hour | **Page** |
+| Slow burn | 6x (error ratio above 0.6%) | 6 h | 30 min | 5% of the budget gone in 6 hours | Ticket |
+
+Both windows must exceed the threshold (composite alarm). The long window avoids paging on blips; the short window makes
+the alert clear quickly once the problem is fixed. Missing probe data counts as failing, because being blind is an
+incident.
+
+### Error budget policy
+- Budget remaining above 50%: ship normally.
+- Below 50%: changes need a rollback plan and are deployed one at a time.
+- Exhausted: freeze feature changes; only reliability work and fixes until the budget recovers.
+- Every fast-burn page gets a short blameless review.
+
+## 6. Suggestions beyond the brief
+1. **WAF** with a rate-based rule on the distribution (about USD 6/month). Left out by default for cost; CloudFront
+   caching and Lambda scaling already absorb ordinary load.
+2. **Multi-region DR**: DynamoDB global table plus a second stack, with Route 53 failover. Worth it only if the
+   business needs an RTO under minutes.
+3. **CDK Pipelines** or GitHub Actions with OIDC to deploy to each account from a single source of truth, plus `cdk-nag`
+   in CI.
+4. **Reserved concurrency** on the API once the account quota is raised above the new-account default of 10.
+5. A second data source (for example another provider) to cross-check the Banxico rate and alert on divergence.

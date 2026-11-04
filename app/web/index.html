@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>USD to MXN: today's exchange rate</title>
+<meta name="description" content="Official USD/MXN FIX exchange rate from Banco de México, with 15-day and 30-day averages and the last 10 days.">
+<style>
+:root{
+  --paper:#f2f5f3; --ink:#0e2a3b; --muted:#4f6572; --rule:#c9d6d1; --accent:#1f6f54; --warn:#9a4a07; --warnbg:#fbeedd;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root{--paper:#0c1a22; --ink:#e6eeea; --muted:#9db1ba; --rule:#26404c; --accent:#5fc9a0; --warn:#f0b36b; --warnbg:#2b2113}
+}
+*{box-sizing:border-box}
+html{background:var(--paper)}
+body{margin:0;color:var(--ink);font:1rem/1.55 var(--sans);padding:clamp(1.25rem,4vw,3rem)}
+main{max-width:46rem;margin:0 auto}
+h1{font:600 1rem/1.3 var(--sans);margin:0;color:var(--muted)}
+.rate{font:500 clamp(4rem,17vw,8.5rem)/1 var(--serif);letter-spacing:-.03em;margin:.35rem 0 0;font-variant-numeric:lining-nums tabular-nums}
+.rate small{font:500 1rem/1 var(--sans);letter-spacing:0;color:var(--muted);margin-left:.5rem}
+.asof{margin:.4rem 0 0;color:var(--muted)}
+.spark{display:block;width:100%;height:5.5rem;margin:1.5rem 0 .25rem;overflow:visible}
+.spark path{fill:none;stroke:var(--accent);stroke-width:2.5;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round}
+.spark circle{fill:var(--accent)}
+.avgs{display:flex;flex-wrap:wrap;gap:1rem 3rem;margin:2rem 0 0;padding:1.25rem 0;border-block:1px solid var(--rule)}
+.avgs dt{color:var(--muted);font-size:.9rem}
+.avgs dd{margin:0;font:500 1.75rem/1.2 var(--serif);font-variant-numeric:tabular-nums}
+h2{font:600 1rem/1.3 var(--sans);margin:2rem 0 .5rem}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:.55rem 0;border-bottom:1px solid var(--rule)}
+th{font-weight:600;color:var(--muted);font-size:.9rem}
+td:last-child,th:last-child{text-align:right}
+.note{margin:1.5rem 0 0;color:var(--muted);font-size:.9rem;max-width:60ch}
+.banner{margin:1.25rem 0 0;padding:.75rem 1rem;background:var(--warnbg);color:var(--warn);border-left:4px solid var(--warn)}
+button{font:inherit;color:var(--paper);background:var(--ink);border:0;padding:.6rem 1.1rem;cursor:pointer;margin-top:.75rem}
+:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+[hidden]{display:none}
+</style>
+</head>
+<body>
+<main>
+  <h1>US dollar to Mexican peso (FIX rate)</h1>
+  <div id="loading" role="status">Loading the latest rate…</div>
+
+  <div id="error" role="alert" hidden>
+    <p class="banner">The rate could not be loaded. Your connection is fine; the data service is not responding right now.</p>
+    <button id="retry" type="button">Try again</button>
+  </div>
+
+  <section id="content" hidden aria-live="polite">
+    <p class="rate"><span id="rate"></span><small>MXN per 1 USD</small></p>
+    <p class="asof" id="asof"></p>
+    <p class="banner" id="stale" hidden>This rate is older than expected. Banco de México may not have published a newer one yet.</p>
+    <svg class="spark" id="spark" role="img" aria-label="Trend of the last 10 days" preserveAspectRatio="none"></svg>
+
+    <dl class="avgs">
+      <div><dt>15-day average</dt><dd id="avg15"></dd></div>
+      <div><dt>30-day average</dt><dd id="avg30"></dd></div>
+    </dl>
+
+    <h2>Last 10 days</h2>
+    <table>
+      <thead><tr><th scope="col">Date</th><th scope="col">MXN per USD</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p class="note">Source: Banco de México, series SF43718 (FIX rate, published each business day). Averages cover the last 15 and 30 calendar days; weekends and holidays have no published rate.</p>
+  </section>
+</main>
+<script src="/app.js" defer></script>
+</body>
+</html>

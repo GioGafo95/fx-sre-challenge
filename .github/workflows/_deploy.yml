@@ -1,0 +1,63 @@
+# Reusable deploy job. Account, region and role come from the GitHub Environment, so the same
+# code deploys to any number of AWS accounts. Authentication is OIDC: no stored AWS keys.
+name: deploy (reusable)
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+
+permissions:
+  id-token: write      # request the OIDC token
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false      # never kill a deploy halfway
+    env:
+      ENV_NAME: ${{ vars.ENV_NAME }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+      ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+      BANXICO_TOKEN_SECRET_ARN: ${{ vars.BANXICO_TOKEN_SECRET_ARN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: docker/setup-qemu-action@v3          # lets an x86 runner build the arm64 image
+        with: { platforms: arm64 }
+      - uses: docker/setup-buildx-action@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Install CDK
+        run: |
+          npm install -g aws-cdk
+          cd infra && pip install -r requirements.txt
+      - name: Deploy
+        working-directory: infra
+        run: |
+          EXTRA=()
+          [ -n "$ALERT_EMAIL" ] && EXTRA+=(-c "alert_email=$ALERT_EMAIL")
+          [ -n "$BANXICO_TOKEN_SECRET_ARN" ] && EXTRA+=(-c "banxico_token_secret_arn=$BANXICO_TOKEN_SECRET_ARN")
+          cdk deploy --all --require-approval never \
+            -c "env_name=$ENV_NAME" -c "region=$AWS_REGION" "${EXTRA[@]}"
+      - name: Smoke test
+        run: |
+          URL=$(aws cloudformation describe-stacks --stack-name "fx-$ENV_NAME-app" \
+            --query "Stacks[0].Outputs[?OutputKey=='SiteUrl'].OutputValue" --output text)
+          echo "Site: $URL"
+          page=$(curl -s -o /dev/null -w '%{http_code}' "$URL/")
+          api=$(curl -s -o /dev/null -w '%{http_code}' "$URL/api/rates")
+          echo "page=$page api=$api"
+          [ "$page" = 200 ] || { echo "Site page failed"; exit 1; }
+          # 200 = data served; 503 = reachable but no data yet (token not stored). Anything else is a wiring bug.
+          case "$api" in 200|503) ;; *) echo "API wiring failed"; exit 1;; esac

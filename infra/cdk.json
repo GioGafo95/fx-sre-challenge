@@ -1,0 +1,12 @@
+{
+  "app": "python app.py",
+  "context": {
+    "env_name": "prod",
+    "region": "us-east-2",
+    "alert_email": "",
+    "probe_rate_minutes": 5,
+    "domain_name": "",
+    "certificate_arn": "",
+    "banxico_token_secret_arn": ""
+  }
+}
