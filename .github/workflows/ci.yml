@@ -1,0 +1,36 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }          # a version the CDK libraries are tested on
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: App tests
+        working-directory: app
+        run: |
+          pip install -r requirements-dev.txt
+          PYTHONPATH=src pytest -q
+      - name: Infra tests and synth
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: "111111111111"   # dummy values: synth needs no AWS access
+          CDK_DEFAULT_REGION: us-east-1
+          CDK_OUTDIR: cdk.out
+        run: |
+          pip install -r requirements.txt
+          pytest -q tests
+          python app.py                            # full synthesis of all three stacks
+      - name: Script syntax
+        run: for f in infra/scripts/*.sh; do bash -n "$f"; done

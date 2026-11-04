@@ -1,0 +1,63 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Lets one GitHub repository and one GitHub Environment deploy to this AWS account through OIDC
+  (no long-lived keys). Deploy once per account and environment, after "cdk bootstrap".
+Parameters:
+  GitHubOrg:
+    Type: String
+  GitHubRepo:
+    Type: String
+  EnvironmentName:
+    Type: String
+    Description: GitHub Environment allowed to assume the role (for example dev or prod)
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: An account can have only one GitHub OIDC provider. Use false if it already exists.
+  CdkQualifier:
+    Type: String
+    Default: hnb659fds
+Conditions:
+  MakeProvider: !Equals [!Ref CreateOidcProvider, "true"]
+Resources:
+  GitHubProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: MakeProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: !Sub "GitHub Actions deploy role for ${GitHubOrg}/${GitHubRepo} (${EnvironmentName})"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+                # Only this repository, and only jobs running in this GitHub Environment.
+                "token.actions.githubusercontent.com:sub": !Sub "repo:${GitHubOrg}/${GitHubRepo}:environment:${EnvironmentName}"
+      Policies:
+        - PolicyName: cdk-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # The CDK CLI does the real work through the roles created by "cdk bootstrap".
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-*-role-${AWS::AccountId}-*"
+              # Read stack outputs for the smoke test.
+              - Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/fx-*/*"
+Outputs:
+  RoleArn:
+    Value: !GetAtt DeployRole.Arn
+    Description: Put this in the GitHub Environment variable AWS_ROLE_ARN

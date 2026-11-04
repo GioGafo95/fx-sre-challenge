@@ -1,0 +1,23 @@
+name: deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  dev:
+    needs: ci
+    uses: ./.github/workflows/_deploy.yml
+    with: { environment: dev }
+
+  prod:
+    needs: dev          # runs only if dev succeeded; the "prod" Environment can require a human approval
+    uses: ./.github/workflows/_deploy.yml
+    with: { environment: prod }
