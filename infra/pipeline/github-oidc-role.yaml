@@ -72,6 +72,11 @@ Resources:
               - Effect: Allow
                 Action: sts:AssumeRole
                 Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-*-role-${AWS::AccountId}-*"
+              # Lets CDK read the bootstrap version itself, so a missing "cdk bootstrap" reports
+              # "bootstrap stack not found" instead of an AccessDenied on ssm:GetParameter.
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:parameter/cdk-bootstrap/${CdkQualifier}/version"
               # Read stack outputs for the smoke test.
               - Effect: Allow
                 Action: cloudformation:DescribeStacks

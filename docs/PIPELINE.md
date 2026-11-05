@@ -14,7 +14,9 @@ push to main               -> ci -> deploy dev -> (approval) -> deploy prod
   no data yet). Anything else fails the pipeline.
 
 ## One-time setup per AWS account
-1. Bootstrap CDK (already done for your test account): `cdk bootstrap aws://<ACCOUNT>/<REGION>`
+1. Bootstrap CDK: `cdk bootstrap aws://<ACCOUNT>/<REGION>`. Check with
+   `aws cloudformation describe-stacks --stack-name CDKToolkit --region <REGION>`. If the `CDKToolkit` stack is deleted
+   (for example by a teardown), every deploy fails with "could not be used to assume cdk-hnb659fds-...-role": bootstrap again.
 2. Create the deploy role (run with admin credentials for that account, from the repository root). Use one stack
    per environment so `dev` and `prod` do not overwrite each other:
    ```bash
