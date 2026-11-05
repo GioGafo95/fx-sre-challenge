@@ -29,7 +29,8 @@ A free Banxico API token: https://www.banxico.org.mx/SieAPIRest/service/v1/token
    | `DOMAIN_NAME` + `CERTIFICATE_ARN` | Custom domain; the ACM certificate must be in **us-east-1** | CloudFront domain |
    | `CDK_QUALIFIER` | Only if the account was bootstrapped with a custom qualifier | `hnb659fds` |
 
-   Probe frequency: `-c probe_rate_minutes=10` lowers cost slightly.
+   Keep the probe at its default of one minute: the SLO alerting is designed for it (see the SLO section of
+   `PROJECT_DOCUMENTATION.md`).
 4. **Deploy.**
    ```bash
    cd infra

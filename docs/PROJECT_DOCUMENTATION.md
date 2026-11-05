@@ -91,8 +91,8 @@ the edge, the origin sees roughly one request per 5 minutes per edge location, w
 - Container runs as a non-root user; ECR scans images on push; dependencies are pinned.
 
 **Cost (estimate, verify with the AWS pricing calculator).** Lambda, DynamoDB, S3 and CloudFront stay within or near
-free tier at low traffic. The recurring cost is mostly CloudWatch: nine alarms, two composite alarms, five custom
-metrics and a dashboard, plus one secret. Expect roughly **USD 5 to 8 per month**. Levers already used: arm64, on-demand
+free tier at low traffic. The recurring cost is mostly CloudWatch: eleven alarms, three composite alarms, six custom
+metrics and a dashboard, plus one secret. The one-minute probe stays within the Lambda free tier. Expect roughly **USD 5 to 8 per month**. Levers already used: arm64, on-demand
 DynamoDB, no NAT/ALB/API Gateway, edge caching, 30-day log retention, CloudFront price class 100.
 
 **Operability.** Everything is code. Structured logs, X-Ray tracing on all functions, one dashboard, and alarms with
@@ -107,27 +107,42 @@ stored in GitHub, and each environment can only be deployed by jobs running in i
 Definitions. An **SLI** is a measured ratio of good events to valid events. An **SLO** is the target for that ratio over
 a window. The **error budget** is `1 - SLO`: the amount of unreliability we are allowed to spend.
 
-All SLIs come from a synthetic probe that calls the public URL every 5 minutes, because that is what a visitor
-experiences, including CloudFront.
+The user-facing SLIs come from a synthetic probe that calls the public URL **every minute**, through CloudFront, because
+that is what a visitor experiences. Ingestion success comes from the ingestion runs themselves. All targets, thresholds
+and alert rules are defined once, in `infra/fx_infra/observability_stack.py`.
 
-| # | SLI (good event) | SLO | Window | Error budget |
+| # | SLI: good event / valid events | SLO (30 days) | Error budget (30 days) | Alerting |
 |---|---|---|---|---|
-| 1 | **Availability**: probe gets HTTP 200 with a well-formed payload containing a current rate | 99.9% | 30 days | 0.1% (about 43 minutes of failed probes) |
-| 2 | **Latency**: probe round-trip p95 | under 800 ms | 5-minute windows, alarm after 15 minutes | n/a (threshold alarm) |
-| 3 | **Freshness**: newest rate is no more than 4 days old | 99% of probes | 30 days | 1% |
-| 4 | **Ingestion success**: ingestion runs that end without reaching the DLQ | 99% of runs | 30 days | 1% |
+| 1 | **Availability**: probes that get HTTP 200 with a well-formed payload containing a current rate / all probes | 99.9% | 0.1%: about 43 failed probes (43 minutes) | Page (fast burn) and ticket (slow burn), below |
+| 2 | **Latency**: successful probes with a round trip of at most 800 ms / successful probes | 99% | 1%: about 430 slow probes | Ticket when 6x the budget burns over both 6 h and 30 min |
+| 3 | **Freshness**: probes that see a newest rate no older than 4 days / all probes | 99% | 1%: about 7 hours of stale data | Ticket after 3 hours stale |
+| 4 | **Ingestion success**: ingestion runs that succeed, after retries / all runs (success + dead-letter queue) | 99% | 1%: with about 55 runs a month, one failed run spends the month's budget | Ticket on any message in the DLQ |
+
+Notes.
+- A failed probe counts against availability only; latency is measured over successful probes, so one incident is not
+  counted twice.
+- Ingestion is deliberately strict: every run re-reads 45 days, so one failed run causes no data loss, but it should
+  still be looked at. Freshness (SLO 3) is the SLO that measures the user impact of ingestion problems.
+- Freshness tolerates long weekends: Banxico does not publish on weekends or holidays, so data up to 4 days old is normal.
+- The dashboard `fx-<env>-observability-slo` shows, for each SLO, the 30-day SLI and the **budget remaining**
+  (`1 - spent / allowed`; 100% = untouched, 0% or below = exhausted).
 
 ### Burn-rate alerting for SLO 1
 Burn rate is how fast the budget is being spent compared with spending it evenly over 30 days.
 
-| Alert | Burn rate | Long window | Short window | Meaning | Action |
-|---|---|---|---|---|---|
-| Fast burn | 14.4x (error ratio above 1.44%) | 1 h | 5 min | 2% of the monthly budget gone in an hour | **Page** |
-| Slow burn | 6x (error ratio above 0.6%) | 6 h | 30 min | 5% of the budget gone in 6 hours | Ticket |
+| Alert | Burn rate | Long window | Short window | Extra condition | Meaning | Action |
+|---|---|---|---|---|---|---|
+| Fast burn | 14.4x (error ratio above 1.44%) | 1 h | 5 min | 3 consecutive failed probes | 2% of the monthly budget gone in an hour | **Page** |
+| Slow burn | 6x (error ratio above 0.6%) | 6 h | 30 min | none | 5% of the budget gone in 6 hours | Ticket |
 
-Both windows must exceed the threshold (composite alarm). The long window avoids paging on blips; the short window makes
-the alert clear quickly once the problem is fixed. Missing probe data counts as failing, because being blind is an
+Both windows must exceed the threshold (composite alarm). The long window avoids alerting on blips; the short window
+makes the alert clear quickly once the problem is fixed. Missing probe data counts as failing, because being blind is an
 incident.
+
+Why the extra condition: with one probe per minute, a single failed probe is already 1/60 = 1.7% of the hour, above the
+1.44% fast-burn threshold, so pure burn-rate maths would page on one blip. Requiring 3 consecutive failures means a
+transient error never pages, while a real outage pages after about 3 minutes and has spent about 7% of the monthly
+budget by then. The slow-burn ticket still catches repeated short blips.
 
 ### Error budget policy
 - Budget remaining above 50%: ship normally.
