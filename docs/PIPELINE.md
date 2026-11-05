@@ -14,17 +14,27 @@ push to main               -> ci -> deploy dev -> (approval) -> deploy prod
   no data yet). Anything else fails the pipeline.
 
 ## One-time setup per AWS account
-1. Bootstrap CDK (already done for your test account): `cdk bootstrap aws://<ACCOUNT>/<REGION>`
-2. Create the deploy role (run with admin credentials for that account):
+1. Bootstrap CDK: `cdk bootstrap aws://<ACCOUNT>/<REGION>`. Check with
+   `aws cloudformation describe-stacks --stack-name CDKToolkit --region <REGION>`. If the `CDKToolkit` stack is deleted
+   (for example by a teardown), every deploy fails with "could not be used to assume cdk-hnb659fds-...-role": bootstrap again.
+2. Create the deploy role (run with admin credentials for that account, from the repository root). Use one stack
+   per environment so `dev` and `prod` do not overwrite each other:
    ```bash
-   aws cloudformation deploy --stack-name fx-github-oidc \
-     --template-file infra/pipeline/github-oidc-role.yaml --capabilities CAPABILITY_IAM \
-     --parameter-overrides GitHubOrg=<org-or-user> GitHubRepo=<repo> EnvironmentName=<dev|prod>
-   aws cloudformation describe-stacks --stack-name fx-github-oidc \
-     --query "Stacks[0].Outputs[?OutputKey=='RoleArn'].OutputValue" --output text
+   aws cloudformation deploy --stack-name fx-github-oidc-<env> --region <REGION>      --template-file infra/pipeline/github-oidc-role.yaml --capabilities CAPABILITY_IAM      --parameter-overrides GitHubOrg=<owner> GitHubRepo=<repo> EnvironmentName=<env>        GitHubOrgId=<owner-id> GitHubRepoId=<repo-id>
+   aws cloudformation describe-stacks --stack-name fx-github-oidc-<env> --region <REGION>      --query "Stacks[0].Outputs[?OutputKey=='RoleArn'].OutputValue" --output text
    ```
-   If the account already has a GitHub OIDC provider, add `CreateOidcProvider=false`. In Git Bash on Windows,
-   run `export MSYS_NO_PATHCONV=1` first.
+   - Names are **case-sensitive** and must match GitHub exactly.
+   - `GitHubOrgId` / `GitHubRepoId`: some repositories get an OIDC `sub` claim that includes numeric IDs
+     (`repo:Owner@123/Repo@456:environment:dev`). Get them with `curl -s https://api.github.com/repos/<owner>/<repo>`
+     (`owner.id` and `id`). Leave both out only if the claim is the classic `repo:Owner/Repo:environment:dev`.
+   - An account can have only one GitHub OIDC provider: add `CreateOidcProvider=false` for every stack after the first
+     one in the same account.
+   - In Git Bash on Windows, run `export MSYS_NO_PATHCONV=1` first.
+   - If the workflow fails with `Not authorized to perform sts:AssumeRoleWithWebIdentity`, CloudTrail shows the exact
+     claim AWS received (look at `userName`):
+     ```bash
+     aws cloudtrail lookup-events --region <REGION> --max-results 3        --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity        --query "Events[].CloudTrailEvent" --output text
+     ```
 3. In GitHub: **Settings -> Environments -> New environment** (`dev`, `prod`). Add these **variables** (not secrets):
 
    | Variable | Value |
