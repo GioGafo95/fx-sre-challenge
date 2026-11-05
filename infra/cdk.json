@@ -1,6 +1,7 @@
 {
   "app": "python app.py",
   "context": {
+    "@aws-cdk/core:defaultCrossStackReferences": "strong",
     "env_name": "prod",
     "region": "us-east-2",
     "alert_email": "",

@@ -136,9 +136,9 @@ class ObservabilityStack(Stack):
             return cw.SingleValueWidget(
                 title=f"{name}: SLO {slo:.1%} (30 days)", width=6, height=4, start="-P30D", set_period_to_time_range=True,
                 full_precision=False, metrics=[
-                    cw.MathExpression(expression=expr, using_metrics=metrics, label="SLI"),
+                    cw.MathExpression(expression=expr, using_metrics=metrics, label="SLI", period=Duration.days(1)),
                     cw.MathExpression(expression=f"1 - (1 - ({expr})) / {1 - slo:.6f}", using_metrics=metrics,
-                                      label="Budget remaining")])
+                                      label="Budget remaining", period=Duration.days(1))])
         dash = cw.Dashboard(self, "Dashboard", dashboard_name=f"{Stack.of(self).stack_name}-slo",
                             default_interval=Duration.days(7))
         dash.add_widgets(
