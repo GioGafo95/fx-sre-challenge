@@ -47,6 +47,7 @@ jobs:
         run: |
           # Without this, an Environment missing ENV_NAME would deploy (and overwrite) the fx-prod-* stacks.
           : "${ENV_NAME:?Set the ENV_NAME variable in the '${{ inputs.environment }}' GitHub Environment}"
+          [ -n "$ALERT_EMAIL" ] || echo "::warning::ALERT_EMAIL is not set in '${{ inputs.environment }}': alarms will notify nobody"
           EXTRA=()
           [ -n "$ALERT_EMAIL" ] && EXTRA+=(-c "alert_email=$ALERT_EMAIL")
           [ -n "$BANXICO_TOKEN_SECRET_ARN" ] && EXTRA+=(-c "banxico_token_secret_arn=$BANXICO_TOKEN_SECRET_ARN")

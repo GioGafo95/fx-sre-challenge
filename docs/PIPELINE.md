@@ -50,7 +50,7 @@ In Git Bash on Windows, run `export MSYS_NO_PATHCONV=1` first.
    | `AWS_ROLE_ARN` | yes | the RoleArn from step 2 |
    | `AWS_REGION` | yes | for example `us-east-1` |
    | `ENV_NAME` | yes | `dev`, `prod`, ... The deploy stops if it is empty, so one environment can never overwrite another's stacks. |
-   | `ALERT_EMAIL` | no | address subscribed to alarms (confirm the SNS email once) |
+   | `ALERT_EMAIL` | yes for `prod` | address subscribed to alarms. Without it alarms notify nobody (the deploy warns). Confirm the SNS email once after the first deploy. |
    | `BANXICO_TOKEN_SECRET_ARN` | no | an existing secret holding the token, instead of the one the data stack creates |
 
    On `prod`, also set:

@@ -49,6 +49,20 @@ EventBridge (every 1 min) -> Probe Lambda -> https://<cloudfront>/api/rates -> c
 CloudWatch: alarms (burn rate, latency, stale data, DLQ, errors) -> SNS -> email;  one dashboard
 ```
 
+### Infrastructure as code
+All infrastructure is defined with AWS CDK (Python) in `infra/`, which generates the CloudFormation templates and
+deploys them as three stacks per environment, in this order:
+
+| Stack | Contents | Protection |
+|---|---|---|
+| `fx-<env>-data` | DynamoDB table (rates), Secrets Manager secret (Banxico token) | Termination protection, table retained on delete |
+| `fx-<env>-app` | API Lambda (container image), ingest Lambda + schedules + DLQ, S3 site bucket, CloudFront | Can be redeployed or destroyed freely |
+| `fx-<env>-observability` | Probe Lambda, alarms, SNS alert topic, dashboard | Can be redeployed or destroyed freely |
+
+Two one-off stacks support them: `CDKToolkit` (CDK bootstrap) and `fx-github-oidc-<env>` (the pipeline's deploy role,
+plain CloudFormation in `infra/pipeline/github-oidc-role.yaml`). To read the generated templates, run `cdk synth`
+in `infra/` (written to `infra/cdk.out/`); `cdk diff` shows what a deploy would change.
+
 ### Deviations from the suggested services, and why
 The brief lists RDS, EC2, Lambda and VPC and invites changes where cost or performance improve.
 
@@ -154,6 +168,7 @@ pages after about 3 minutes; repeated short blips still open the slow-burn ticke
 | Step | How | Details |
 |---|---|---|
 | Test locally | `cd app && PYTHONPATH=src pytest`; `cd infra && pytest tests`; demo site with `FX_MODE=demo` | `app/README.md` |
+| Review the infrastructure | `cd infra && cdk synth` (CloudFormation templates) and `cdk diff` (changes against a deployed environment) | §3 |
 | One-time setup per environment | Bootstrap CDK, create the OIDC deploy role, create the GitHub Environment with its variables | `docs/PIPELINE.md` |
 | Deploy | Merge to `main`: CI, then `dev`, then `prod` after approval | `docs/PIPELINE.md` |
 | First data | Store the Banxico token and run the first ingestion (`infra/scripts/post-deploy.sh`) | `docs/PIPELINE.md`, step 5 |

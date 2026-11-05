@@ -24,6 +24,8 @@ PROBE_RATE_MINUTES = 1                   # the alerting maths above assumes one 
 
 
 class ObservabilityStack(Stack):
+    """SLIs, SLO alerting and the dashboard: synthetic probe, burn-rate alarms, health alarms, SNS topic for alerts."""
+
     def __init__(self, scope: Construct, cid: str, distribution: cf.IDistribution, api_fn: _lambda.IFunction,
                  ingest_fn: _lambda.IFunction, dlq: sqs.IQueue, table: ddb.ITable,
                  alert_email: str | None, probe_rate_minutes: int = PROBE_RATE_MINUTES, **kw) -> None:
