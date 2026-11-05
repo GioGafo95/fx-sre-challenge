@@ -10,6 +10,19 @@ any write path from users.
 
 Data source: Banxico SIE REST API, series **SF43718** (USD/MXN FIX rate, one value per business day, free token).
 
+### How the objective is met
+> Create a website to display essential currency exchange information, including current and historical USD exchange
+> rates, along with defining Service Level Objectives (SLO), Service Level Indicators (SLI), and Error Budgets.
+
+| Requirement | Delivered as | Where |
+|---|---|---|
+| Website | Static page on CloudFront + S3, one JSON API behind it, deployed to `dev` and `prod` by the pipeline | §3, `app/web/`, `docs/PIPELINE.md` |
+| Current USD exchange rate | Latest Banxico FIX rate with its publication date, and a warning when it is more than 4 days old | §2, `GET /api/rates` → `current`, `stale` |
+| Historical USD exchange rates | Every rate of the last 10 days (table + trend line) and the 15- and 30-day averages | §2, `GET /api/rates` → `history`, `average` |
+| SLIs | Availability, latency, freshness and ingestion success, measured from outside through the public URL | §5, `infra/lambda/probe.py`, dashboard `fx-<env>-observability-slo` |
+| SLOs | A target and a 30-day window for each SLI | §5 |
+| Error budgets | Budget per SLO, burn-rate alerts that page or open a ticket, and a policy for what happens as it is spent | §5, `infra/fx_infra/observability_stack.py` |
+
 ## 2. Website features
 | Feature | Definition |
 |---|---|
