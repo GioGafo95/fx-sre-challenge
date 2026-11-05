@@ -3,7 +3,7 @@ import os
 from aws_cdk import (
     CfnOutput, Duration, RemovalPolicy, Stack,
     aws_cloudfront as cf, aws_cloudwatch as cw, aws_cloudwatch_actions as cw_actions,
-    aws_dynamodb as ddb, aws_events as events, aws_events_targets as targets,
+    aws_dynamodb as ddb, aws_events as events, aws_events_targets as targets, aws_iam as iam,
     aws_lambda as _lambda, aws_logs as logs, aws_sns as sns, aws_sns_subscriptions as subs, aws_sqs as sqs,
 )
 from constructs import Construct
@@ -32,6 +32,13 @@ class ObservabilityStack(Stack):
         super().__init__(scope, cid, **kw)
 
         topic = sns.Topic(self, "Alerts", enforce_ssl=True)
+        # enforce_ssl gives the topic a resource policy holding only a Deny, which replaces SNS's default policy.
+        # Without this Allow, every alarm action fails with "CloudWatch Alarms is not authorized to perform SNS:Publish".
+        topic.add_to_resource_policy(iam.PolicyStatement(
+            sid="AllowCloudWatchAlarms", actions=["sns:Publish"], resources=[topic.topic_arn],
+            principals=[iam.ServicePrincipal("cloudwatch.amazonaws.com")],
+            conditions={"StringEquals": {"aws:SourceAccount": Stack.of(self).account}},
+        ))
         if alert_email:
             topic.add_subscription(subs.EmailSubscription(alert_email))
         notify = cw_actions.SnsAction(topic)
