@@ -31,5 +31,8 @@ def test_all():
     a.has_resource_properties("AWS::S3::Bucket", {"PublicAccessBlockConfiguration": Match.object_like(
         {"BlockPublicAcls": True, "RestrictPublicBuckets": True})})
     a.has_resource_properties("AWS::Lambda::Function", {"Architectures": ["arm64"]})
-    o.resource_count_is("AWS::CloudWatch::CompositeAlarm", 2)                        # fast + slow burn
+    o.resource_count_is("AWS::CloudWatch::CompositeAlarm", 3)                        # fast + slow burn + latency
+    o.has_resource_properties("AWS::Events::Rule", {"ScheduleExpression": "rate(1 minute)"})  # alerting assumes 1-min
+    o.has_resource_properties("AWS::CloudWatch::Alarm", {                            # one failed probe never pages
+        "EvaluationPeriods": 3, "DatapointsToAlarm": 3, "ComparisonOperator": "LessThanThreshold"})
     o.has_resource_properties("AWS::SNS::Subscription", {"Protocol": "email"})

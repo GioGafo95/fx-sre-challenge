@@ -1,4 +1,4 @@
-"""Synthetic probe: measures what a real visitor gets, through CloudFront. Runs every few minutes.
+"""Synthetic probe: measures what a real visitor gets, through CloudFront. Runs every minute.
 Emits CloudWatch Embedded Metric Format lines (no PutMetricData calls, no extra IAM)."""
 import json
 import os
@@ -27,5 +27,9 @@ def handler(event=None, context=None):
             stale = int(bool(body.get("stale")))
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"level": "ERROR", "msg": "probe_failed", "error": type(exc).__name__}))
-    _emf({"Availability": ok, "LatencyMs": round((time.monotonic() - started) * 1000), "DataStale": stale})
+    latency_ms = round((time.monotonic() - started) * 1000)
+    metrics = {"Availability": ok, "LatencyMs": latency_ms, "DataStale": stale}
+    if ok:  # the latency SLI covers successful probes only; failures are counted by availability
+        metrics["LatencyGood"] = int(latency_ms <= int(os.environ.get("LATENCY_THRESHOLD_MS", "800")))
+    _emf(metrics)
     return {"ok": ok}

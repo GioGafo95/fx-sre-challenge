@@ -32,7 +32,7 @@ web = AppStack(app, f"{prefix}-app", env=env, table=data.table, token_secret=dat
 obs = ObservabilityStack(app, f"{prefix}-observability", env=env, distribution=web.distribution,
                          api_fn=web.api_fn, ingest_fn=web.ingest_fn, dlq=web.dlq, table=data.table,
                          alert_email=ctx("alert_email"),
-                         probe_rate_minutes=int(ctx("probe_rate_minutes") or 5))
+                         probe_rate_minutes=int(ctx("probe_rate_minutes") or 1))
 
 for k, v in {"Project": "fx-rates", "Environment": env_name, "ManagedBy": "cdk"}.items():
     cdk.Tags.of(app).add(k, v)

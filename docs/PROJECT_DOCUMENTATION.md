@@ -10,13 +10,26 @@ any write path from users.
 
 Data source: Banxico SIE REST API, series **SF43718** (USD/MXN FIX rate, one value per business day, free token).
 
+### How the objective is met
+> Create a website to display essential currency exchange information, including current and historical USD exchange
+> rates, along with defining Service Level Objectives (SLO), Service Level Indicators (SLI), and Error Budgets.
+
+| Requirement | Delivered as | Where |
+|---|---|---|
+| Website | Static page on CloudFront + S3, one JSON API behind it, deployed to `dev` and `prod` by the pipeline | §3, `app/web/`, `docs/PIPELINE.md` |
+| Current USD exchange rate | Latest Banxico FIX rate with its publication date, and a warning when it is more than 4 days old | §2, `GET /api/rates` → `current`, `stale` |
+| Historical USD exchange rates | Every rate of the last 10 days (table + trend line) and the 15- and 30-day averages | §2, `GET /api/rates` → `history`, `average` |
+| SLIs | Availability, latency, freshness and ingestion success, measured from outside through the public URL | §5, `infra/lambda/probe.py`, dashboard `fx-<env>-observability-slo` |
+| SLOs | A target and a 30-day window for each SLI | §5 |
+| Error budgets | Budget per SLO, burn-rate alerts that page or open a ticket, and a policy for what happens as it is spent | §5, `infra/fx_infra/observability_stack.py` |
+
 ## 2. Website features
-| Feature | Definition |
-|---|---|
-| Current USD exchange | Most recent published FIX rate and its publication date. |
-| Average, last 15 days | Mean of all published rates in the trailing 15 calendar days. |
-| Average, last month | Mean of all published rates in the trailing 30 calendar days. |
-| Past 10 days | Every published rate in the trailing 10 calendar days, newest first, plus a trend line. |
+| Feature | Definition | On the page |
+|---|---|---|
+| Current USD exchange | Most recent published FIX rate and its publication date. | Large figure, "MXN per 1 USD", with the date |
+| Average, last 15 days | Mean of all published rates in the trailing 15 calendar days. | "15-day average" |
+| Average, last month | Mean of all published rates in the trailing 30 calendar days. | "30-day average" |
+| Past 10 days | Every published rate in the trailing 10 calendar days, newest first. | Table plus a trend line |
 
 Notes. Banxico publishes on business days only, so a 10-day window holds about 7 or 8 rates. The page shows a warning
 when the newest rate is more than 4 days old (a long weekend does not trigger it). If the data service fails, the page
@@ -32,9 +45,23 @@ Browser -> CloudFront (TLS, security headers, cache)
 
 EventBridge (3 schedules) -> Ingest Lambda -> Banxico API -> DynamoDB (write)
                                   |-- token from Secrets Manager;  failures -> SQS DLQ -> alarm
-EventBridge (every 5 min) -> Probe Lambda -> https://<cloudfront>/api/rates -> custom metrics (the SLIs)
+EventBridge (every 1 min) -> Probe Lambda -> https://<cloudfront>/api/rates -> custom metrics (the SLIs)
 CloudWatch: alarms (burn rate, latency, stale data, DLQ, errors) -> SNS -> email;  one dashboard
 ```
+
+### Infrastructure as code
+All infrastructure is defined with AWS CDK (Python) in `infra/`, which generates the CloudFormation templates and
+deploys them as three stacks per environment, in this order:
+
+| Stack | Contents | Protection |
+|---|---|---|
+| `fx-<env>-data` | DynamoDB table (rates), Secrets Manager secret (Banxico token) | Termination protection, table retained on delete |
+| `fx-<env>-app` | API Lambda (container image), ingest Lambda + schedules + DLQ, S3 site bucket, CloudFront | Can be redeployed or destroyed freely |
+| `fx-<env>-observability` | Probe Lambda, alarms, SNS alert topic, dashboard | Can be redeployed or destroyed freely |
+
+Two one-off stacks support them: `CDKToolkit` (CDK bootstrap) and `fx-github-oidc-<env>` (the pipeline's deploy role,
+plain CloudFormation in `infra/pipeline/github-oidc-role.yaml`). To read the generated templates, run `cdk synth`
+in `infra/` (written to `infra/cdk.out/`); `cdk diff` shows what a deploy would change.
 
 ### Deviations from the suggested services, and why
 The brief lists RDS, EC2, Lambda and VPC and invites changes where cost or performance improve.
@@ -78,39 +105,58 @@ the edge, the origin sees roughly one request per 5 minutes per edge location, w
 - Container runs as a non-root user; ECR scans images on push; dependencies are pinned.
 
 **Cost (estimate, verify with the AWS pricing calculator).** Lambda, DynamoDB, S3 and CloudFront stay within or near
-free tier at low traffic. The recurring cost is mostly CloudWatch: nine alarms, two composite alarms, five custom
-metrics and a dashboard, plus one secret. Expect roughly **USD 5 to 8 per month**. Levers already used: arm64, on-demand
-DynamoDB, no NAT/ALB/API Gateway, edge caching, 30-day log retention, CloudFront price class 100.
+free tier at low traffic. The recurring cost is mostly CloudWatch: eleven alarms, three composite alarms, six custom
+metrics and a dashboard, plus one secret; the one-minute probe stays within the Lambda free tier. Expect roughly
+**USD 5 to 8 per month**. Levers already used: arm64, on-demand DynamoDB, no NAT/ALB/API Gateway, edge caching,
+30-day log retention, CloudFront price class 100.
 
 **Operability.** Everything is code. Structured logs, X-Ray tracing on all functions, one dashboard, and alarms with
 runbook-style descriptions. Resource names are generated, so the same code deploys to any number of accounts without
 name collisions.
 
+**Delivery.** A GitHub Actions pipeline (`docs/PIPELINE.md`) tests and synthesizes every pull request, and every merge to
+`main` deploys `dev`, then `prod` after a manual approval. It authenticates to AWS through OIDC, so no AWS keys are
+stored in GitHub, and each environment can only be deployed by jobs running in its own GitHub Environment.
+
 ## 5. SLIs, SLOs and error budgets
 Definitions. An **SLI** is a measured ratio of good events to valid events. An **SLO** is the target for that ratio over
 a window. The **error budget** is `1 - SLO`: the amount of unreliability we are allowed to spend.
 
-All SLIs come from a synthetic probe that calls the public URL every 5 minutes, because that is what a visitor
-experiences, including CloudFront.
+The user-facing SLIs come from a synthetic probe that calls the public URL **every minute**, through CloudFront, because
+that is what a visitor experiences. Ingestion success comes from the ingestion runs themselves. All targets, thresholds
+and alert rules are defined once, in `infra/fx_infra/observability_stack.py`.
 
-| # | SLI (good event) | SLO | Window | Error budget |
+| # | SLI: good event / valid events | SLO (30 days) | Error budget (30 days) | Alerting |
 |---|---|---|---|---|
-| 1 | **Availability**: probe gets HTTP 200 with a well-formed payload containing a current rate | 99.9% | 30 days | 0.1% (about 43 minutes of failed probes) |
-| 2 | **Latency**: probe round-trip p95 | under 800 ms | 5-minute windows, alarm after 15 minutes | n/a (threshold alarm) |
-| 3 | **Freshness**: newest rate is no more than 4 days old | 99% of probes | 30 days | 1% |
-| 4 | **Ingestion success**: ingestion runs that end without reaching the DLQ | 99% of runs | 30 days | 1% |
+| 1 | **Availability**: probes that get HTTP 200 with a well-formed payload containing a current rate / all probes | 99.9% | 0.1%: about 43 failed probes (43 minutes) | Page (fast burn) and ticket (slow burn), below |
+| 2 | **Latency**: successful probes with a round trip of at most 800 ms / successful probes | 99% | 1%: about 430 slow probes | Ticket when 6x the budget burns over both 6 h and 30 min |
+| 3 | **Freshness**: probes that see a newest rate no older than 4 days / all probes | 99% | 1%: about 7 hours of stale data | Ticket after 3 hours stale |
+| 4 | **Ingestion success**: ingestion runs that succeed, after retries / all runs (success + dead-letter queue) | 99% | 1%: with about 75 runs a month, one failed run spends the month's budget | Ticket on any message in the DLQ |
+
+Notes.
+- A failed probe counts against availability only; latency is measured over successful probes, so one incident is not
+  counted twice.
+- Ingestion is deliberately strict: every run re-reads 45 days, so one failed run causes no data loss, but it should
+  still be looked at. Freshness (SLO 3) is the SLO that measures the user impact of ingestion problems.
+- Freshness tolerates long weekends: Banxico does not publish on weekends or holidays, so data up to 4 days old is normal.
+- The dashboard `fx-<env>-observability-slo` shows, for each SLO, the 30-day SLI and the **budget remaining**
+  (`1 - spent / allowed`; 100% = untouched, 0% or below = exhausted).
 
 ### Burn-rate alerting for SLO 1
 Burn rate is how fast the budget is being spent compared with spending it evenly over 30 days.
 
-| Alert | Burn rate | Long window | Short window | Meaning | Action |
-|---|---|---|---|---|---|
-| Fast burn | 14.4x (error ratio above 1.44%) | 1 h | 5 min | 2% of the monthly budget gone in an hour | **Page** |
-| Slow burn | 6x (error ratio above 0.6%) | 6 h | 30 min | 5% of the budget gone in 6 hours | Ticket |
+| Alert | Burn rate | Long window | Short window | Extra condition | Meaning | Action |
+|---|---|---|---|---|---|---|
+| Fast burn | 14.4x (error ratio above 1.44%) | 1 h | 5 min | 3 consecutive failed probes | 2% of the monthly budget gone in an hour | **Page** |
+| Slow burn | 6x (error ratio above 0.6%) | 6 h | 30 min | none | 5% of the budget gone in 6 hours | Ticket |
 
-Both windows must exceed the threshold (composite alarm). The long window avoids paging on blips; the short window makes
-the alert clear quickly once the problem is fixed. Missing probe data counts as failing, because being blind is an
+Both windows must exceed the threshold (composite alarm). The long window avoids alerting on blips; the short window
+makes the alert clear quickly once the problem is fixed. Missing probe data counts as failing, because being blind is an
 incident.
+
+Why the extra condition: with one probe per minute, a single failed probe is already 1/60 = 1.7% of the hour, above the
+1.44% threshold, so burn rate alone would page on one blip. With it, a transient error never pages and a real outage
+pages after about 3 minutes; repeated short blips still open the slow-burn ticket.
 
 ### Error budget policy
 - Budget remaining above 50%: ship normally.
@@ -118,12 +164,25 @@ incident.
 - Exhausted: freeze feature changes; only reliability work and fixes until the budget recovers.
 - Every fast-burn page gets a short blameless review.
 
-## 6. Suggestions beyond the brief
+## 6. Steps to build, deploy and operate
+| Step | How | Details |
+|---|---|---|
+| Test locally | `cd app && PYTHONPATH=src pytest`; `cd infra && pytest tests`; demo site with `FX_MODE=demo` | `app/README.md` |
+| Review the infrastructure | `cd infra && cdk synth` (CloudFormation templates) and `cdk diff` (changes against a deployed environment) | §3 |
+| One-time setup per environment | Bootstrap CDK, create the OIDC deploy role, create the GitHub Environment with its variables | `docs/PIPELINE.md` |
+| Deploy | Merge to `main`: CI, then `dev`, then `prod` after approval | `docs/PIPELINE.md` |
+| First data | Store the Banxico token and run the first ingestion (`infra/scripts/post-deploy.sh`) | `docs/PIPELINE.md`, step 5 |
+| Verify | Site and `/api/rates` return 200; dashboard `fx-<env>-observability-slo` shows probe data within minutes | `docs/PIPELINE.md` |
+| Roll back | Revert the commit on `main`; the pipeline redeploys the previous version | `docs/PIPELINE.md` |
+
+Deploying from a workstation without the pipeline is also possible: `docs/DEPLOYMENT.md`.
+
+## 7. Suggestions beyond the brief
 1. **WAF** with a rate-based rule on the distribution (about USD 6/month). Left out by default for cost; CloudFront
    caching and Lambda scaling already absorb ordinary load.
 2. **Multi-region DR**: DynamoDB global table plus a second stack, with Route 53 failover. Worth it only if the
    business needs an RTO under minutes.
-3. **CDK Pipelines** or GitHub Actions with OIDC to deploy to each account from a single source of truth, plus `cdk-nag`
-   in CI.
+3. **`cdk-nag`** in CI, to fail pull requests that introduce insecure infrastructure (the OIDC deploy pipeline itself
+   is already in place).
 4. **Reserved concurrency** on the API once the account quota is raised above the new-account default of 10.
 5. A second data source (for example another provider) to cross-check the Banxico rate and alert on divergence.

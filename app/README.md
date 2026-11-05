@@ -20,18 +20,13 @@ FX_MODE=demo PYTHONPATH=src uvicorn fx.main:app --port 8080   # synthetic data, 
 # real data: FX_MODE=live BANXICO_TOKEN=<token> ...            # token is free: banxico.org.mx/SieAPIRest
 ```
 
-## Build and push to ECR (repeat per account/region)
+## Container image
+CDK builds the image (linux/arm64, cheaper on Lambda) and pushes it to the bootstrap ECR repository during deploy, so
+there is nothing to push by hand. To try the image locally:
 ```bash
-export AWS_PROFILE=<profile> AWS_REGION=<region>
-ACCT=$(aws sts get-caller-identity --query Account --output text)
-REPO=fx-rates
-aws ecr describe-repositories --repository-names $REPO >/dev/null 2>&1 || \
-  aws ecr create-repository --repository-name $REPO \
-    --image-scanning-configuration scanOnPush=true --image-tag-mutability IMMUTABLE
-aws ecr get-login-password | docker login --username AWS --password-stdin $ACCT.dkr.ecr.$AWS_REGION.amazonaws.com
-docker buildx build --platform linux/arm64 -t $ACCT.dkr.ecr.$AWS_REGION.amazonaws.com/$REPO:$(git rev-parse --short HEAD) --push .
+docker build -t fx-rates .
+docker run --rm -p 8080:8080 -e FX_MODE=demo fx-rates
 ```
-arm64 (Graviton) is cheaper on Lambda and Fargate. The CDK stack will manage the repository itself; the commands above are for manual testing.
 
 ## Configuration (environment variables)
 `TABLE_NAME` (DynamoDB table; absent = in-memory), `TOKEN_SECRET_ARN` (Secrets Manager, ingestion only),
