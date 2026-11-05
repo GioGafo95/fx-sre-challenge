@@ -36,3 +36,6 @@ def test_all():
     o.has_resource_properties("AWS::CloudWatch::Alarm", {                            # one failed probe never pages
         "EvaluationPeriods": 3, "DatapointsToAlarm": 3, "ComparisonOperator": "LessThanThreshold"})
     o.has_resource_properties("AWS::SNS::Subscription", {"Protocol": "email"})
+    o.has_resource_properties("AWS::SNS::TopicPolicy", {"PolicyDocument": {"Statement": Match.array_with([  # alarms can notify
+        Match.object_like({"Effect": "Allow", "Action": "sns:Publish",
+                           "Principal": {"Service": "cloudwatch.amazonaws.com"}})])}})
