@@ -1,7 +1,12 @@
-# Deployment runbook (repeat for every AWS account)
+# Manual deployment runbook
 
-Stacks per account/region: `fx-<env>-data` (table, secret) -> `fx-<env>-app` (Lambdas, CloudFront, S3) ->
-`fx-<env>-observability` (probe, alarms, dashboard). Default `<env>` is `prod`, default region `us-east-2`.
+The normal way to deploy is the GitHub Actions pipeline (`docs/PIPELINE.md`). Use this runbook to deploy from a
+workstation instead, for example for a one-off account without GitHub access. Both create the same stacks, so pick one
+per environment and stick to it.
+
+Stacks per environment: `fx-<env>-data` (table, secret) -> `fx-<env>-app` (Lambdas, CloudFront, S3) ->
+`fx-<env>-observability` (probe, alarms, dashboard). If you do not pass them, `scripts/deploy.sh` uses `<env>` = `prod`
+and region `us-east-2`; always pass both explicitly.
 
 ## Prerequisites on the machine doing the deploy
 Node 20+, Python 3.12+, AWS CLI v2, AWS CDK CLI (`npm i -g aws-cdk`), Docker with linux/arm64 support
@@ -29,16 +34,19 @@ A free Banxico API token: https://www.banxico.org.mx/SieAPIRest/service/v1/token
    ```bash
    cd infra
    export ALERT_EMAIL=oncall@example.com BANXICO_TOKEN=<token>
-   ./scripts/deploy.sh <profile> <region> prod
+   ./scripts/deploy.sh <profile> us-east-1 prod
    ```
    The script runs `preflight.sh` first and stops on any failure, then `cdk deploy --all`, then `post-deploy.sh`.
    Preflight checks: tools, Docker arm64, credentials, region, bootstrap version, Lambda quota, CloudFront access,
    token secret.
 5. **Review before deploying** (optional, as the brief describes): `cdk synth` writes the CloudFormation templates to
    `infra/cdk.out/`; `cdk diff` shows changes against a deployed account.
-6. **Token** (only if `BANXICO_TOKEN` was not set in step 4):
-   `aws secretsmanager put-secret-value --secret-id <TokenSecretArn output> --secret-string file://token.txt`
-   then `./scripts/post-deploy.sh`.
+6. **Token** (only if `BANXICO_TOKEN` was not set in step 4). Until this is done the API returns 503:
+   ```bash
+   read -rsp "Banxico token: " BANXICO_TOKEN; echo; export BANXICO_TOKEN
+   ENV_NAME=<env> AWS_PROFILE=<profile> AWS_REGION=<region> ./scripts/post-deploy.sh; unset BANXICO_TOKEN
+   ```
+   `post-deploy.sh` stores the token, runs the first ingestion and smoke-tests the site.
 7. **Verify.** The site URL is printed at the end. Check that `/api/rates` returns data, the dashboard
    `fx-<env>-observability-slo` shows probe metrics within about 10 minutes, and the SNS subscription is confirmed.
 
@@ -46,6 +54,8 @@ A free Banxico API token: https://www.banxico.org.mx/SieAPIRest/service/v1/token
 - Rollback: redeploy the previous git revision with the same command (CloudFormation rolls back failed updates itself).
 - Teardown: `cdk destroy fx-<env>-observability fx-<env>-app`. The data stack has termination protection and a
   retained table by design; remove it deliberately (disable protection, then delete) only when the data is not needed.
+- Do not delete `CDKToolkit` (the bootstrap) or `fx-github-oidc-<env>` as part of a teardown: every later deploy, manual
+  or pipeline, depends on them.
 
 ## Common failures
 | Symptom | Cause | Fix |

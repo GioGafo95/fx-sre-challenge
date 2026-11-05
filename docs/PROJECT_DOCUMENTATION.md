@@ -86,6 +86,10 @@ DynamoDB, no NAT/ALB/API Gateway, edge caching, 30-day log retention, CloudFront
 runbook-style descriptions. Resource names are generated, so the same code deploys to any number of accounts without
 name collisions.
 
+**Delivery.** A GitHub Actions pipeline (`docs/PIPELINE.md`) tests and synthesizes every pull request, and every merge to
+`main` deploys `dev`, then `prod` after a manual approval. It authenticates to AWS through OIDC, so no AWS keys are
+stored in GitHub, and each environment can only be deployed by jobs running in its own GitHub Environment.
+
 ## 5. SLIs, SLOs and error budgets
 Definitions. An **SLI** is a measured ratio of good events to valid events. An **SLO** is the target for that ratio over
 a window. The **error budget** is `1 - SLO`: the amount of unreliability we are allowed to spend.
@@ -123,7 +127,7 @@ incident.
    caching and Lambda scaling already absorb ordinary load.
 2. **Multi-region DR**: DynamoDB global table plus a second stack, with Route 53 failover. Worth it only if the
    business needs an RTO under minutes.
-3. **CDK Pipelines** or GitHub Actions with OIDC to deploy to each account from a single source of truth, plus `cdk-nag`
-   in CI.
+3. **`cdk-nag`** in CI, to fail pull requests that introduce insecure infrastructure (the OIDC deploy pipeline itself
+   is already in place).
 4. **Reserved concurrency** on the API once the account quota is raised above the new-account default of 10.
 5. A second data source (for example another provider) to cross-check the Banxico rate and alert on divergence.
